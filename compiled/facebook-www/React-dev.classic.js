@@ -122,17 +122,10 @@ __DEV__ &&
         ) {
           case REACT_PORTAL_TYPE:
             return "Portal";
-          case REACT_PROVIDER_TYPE:
-            if (enableRenderableContext) break;
-            else return (type._context.displayName || "Context") + ".Provider";
           case REACT_CONTEXT_TYPE:
-            return enableRenderableContext
-              ? (type.displayName || "Context") + ".Provider"
-              : (type.displayName || "Context") + ".Consumer";
+            return type.displayName || "Context";
           case REACT_CONSUMER_TYPE:
-            if (enableRenderableContext)
-              return (type._context.displayName || "Context") + ".Consumer";
-            break;
+            return (type._context.displayName || "Context") + ".Consumer";
           case REACT_FORWARD_REF_TYPE:
             var innerType = type.render;
             type = type.displayName;
@@ -210,17 +203,8 @@ __DEV__ &&
       componentName = this.props.ref;
       return void 0 !== componentName ? componentName : null;
     }
-    function ReactElement(
-      type,
-      key,
-      self,
-      source,
-      owner,
-      props,
-      debugStack,
-      debugTask
-    ) {
-      self = props.ref;
+    function ReactElement(type, key, props, owner, debugStack, debugTask) {
+      var refProp = props.ref;
       type = {
         $$typeof: REACT_ELEMENT_TYPE,
         type: type,
@@ -228,7 +212,7 @@ __DEV__ &&
         props: props,
         _owner: owner
       };
-      null !== (void 0 !== self ? self : null)
+      null !== (void 0 !== refProp ? refProp : null)
         ? Object.defineProperty(type, "ref", {
             enumerable: !1,
             get: elementRefGetterWithDeprecationWarning
@@ -267,8 +251,6 @@ __DEV__ &&
       config,
       maybeKey,
       isStaticChildren,
-      source,
-      self,
       debugStack,
       debugTask
     ) {
@@ -319,12 +301,6 @@ __DEV__ &&
         for (var propName in config)
           "key" !== propName && (maybeKey[propName] = config[propName]);
       } else maybeKey = config;
-      if (!disableDefaultPropsExceptForClasses && type && type.defaultProps) {
-        config = type.defaultProps;
-        for (var _propName2 in config)
-          void 0 === maybeKey[_propName2] &&
-            (maybeKey[_propName2] = config[_propName2]);
-      }
       children &&
         defineKeyPropWarningGetter(
           maybeKey,
@@ -335,10 +311,8 @@ __DEV__ &&
       return ReactElement(
         type,
         children,
-        self,
-        source,
-        getOwner(),
         maybeKey,
+        getOwner(),
         debugStack,
         debugTask
       );
@@ -347,10 +321,8 @@ __DEV__ &&
       newKey = ReactElement(
         oldElement.type,
         newKey,
-        void 0,
-        void 0,
-        oldElement._owner,
         oldElement.props,
+        oldElement._owner,
         oldElement._debugStack,
         oldElement._debugTask
       );
@@ -359,7 +331,16 @@ __DEV__ &&
       return newKey;
     }
     function validateChildKeys(node) {
-      isValidElement(node) && node._store && (node._store.validated = 1);
+      isValidElement(node)
+        ? node._store && (node._store.validated = 1)
+        : "object" === typeof node &&
+          null !== node &&
+          node.$$typeof === REACT_LAZY_TYPE &&
+          ("fulfilled" === node._payload.status
+            ? isValidElement(node._payload.value) &&
+              node._payload.value._store &&
+              (node._payload.value._store.validated = 1)
+            : node._store && (node._store.validated = 1));
     }
     function isValidElement(object) {
       return (
@@ -555,35 +536,84 @@ __DEV__ &&
     }
     function lazyInitializer(payload) {
       if (-1 === payload._status) {
-        var ctor = payload._result;
-        ctor = ctor();
-        ctor.then(
+        var resolveDebugValue = null,
+          rejectDebugValue = null;
+        if (enableAsyncDebugInfo) {
+          var ioInfo = payload._ioInfo;
+          null != ioInfo &&
+            ((ioInfo.start = ioInfo.end = performance.now()),
+            (ioInfo.value = new Promise(function (resolve, reject) {
+              resolveDebugValue = resolve;
+              rejectDebugValue = reject;
+            })));
+        }
+        ioInfo = payload._result;
+        var thenable = ioInfo();
+        thenable.then(
           function (moduleObject) {
             if (0 === payload._status || -1 === payload._status)
-              (payload._status = 1), (payload._result = moduleObject);
+              if (
+                ((payload._status = 1),
+                (payload._result = moduleObject),
+                enableAsyncDebugInfo)
+              ) {
+                var _ioInfo = payload._ioInfo;
+                if (null != _ioInfo) {
+                  _ioInfo.end = performance.now();
+                  var debugValue =
+                    null == moduleObject ? void 0 : moduleObject.default;
+                  resolveDebugValue(debugValue);
+                  _ioInfo.value.status = "fulfilled";
+                  _ioInfo.value.value = debugValue;
+                }
+                void 0 === thenable.status &&
+                  ((thenable.status = "fulfilled"),
+                  (thenable.value = moduleObject));
+              }
           },
           function (error) {
             if (0 === payload._status || -1 === payload._status)
-              (payload._status = 2), (payload._result = error);
+              if (
+                ((payload._status = 2),
+                (payload._result = error),
+                enableAsyncDebugInfo)
+              ) {
+                var _ioInfo2 = payload._ioInfo;
+                null != _ioInfo2 &&
+                  ((_ioInfo2.end = performance.now()),
+                  _ioInfo2.value.then(noop, noop),
+                  rejectDebugValue(error),
+                  (_ioInfo2.value.status = "rejected"),
+                  (_ioInfo2.value.reason = error));
+                void 0 === thenable.status &&
+                  ((thenable.status = "rejected"), (thenable.reason = error));
+              }
           }
         );
+        if (
+          enableAsyncDebugInfo &&
+          ((ioInfo = payload._ioInfo), null != ioInfo)
+        ) {
+          var displayName = thenable.displayName;
+          "string" === typeof displayName && (ioInfo.name = displayName);
+        }
         -1 === payload._status &&
-          ((payload._status = 0), (payload._result = ctor));
+          ((payload._status = 0), (payload._result = thenable));
       }
       if (1 === payload._status)
         return (
-          (ctor = payload._result),
-          void 0 === ctor &&
+          (ioInfo = payload._result),
+          void 0 === ioInfo &&
             console.error(
               "lazy: Expected the result of a dynamic import() call. Instead received: %s\n\nYour code should look like: \n  const MyComponent = lazy(() => import('./MyComponent'))\n\nDid you accidentally put curly braces around the import?",
-              ctor
+              ioInfo
             ),
-          "default" in ctor ||
+          "default" in ioInfo ||
             console.error(
               "lazy: Expected the result of a dynamic import() call. Instead received: %s\n\nYour code should look like: \n  const MyComponent = lazy(() => import('./MyComponent'))",
-              ctor
+              ioInfo
             ),
-          ctor.default
+          ioInfo.default
         );
       throw payload._result;
     }
@@ -597,6 +627,9 @@ __DEV__ &&
     }
     function useMemoCache(size) {
       return resolveDispatcher().useMemoCache(size);
+    }
+    function useEffectEvent(callback) {
+      return resolveDispatcher().useEffectEvent(callback);
     }
     function releaseAsyncTransition() {
       ReactSharedInternals.asyncTransitions--;
@@ -751,12 +784,10 @@ __DEV__ &&
         typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart &&
       __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart(Error());
     var dynamicFeatureFlags = require("ReactFeatureFlags"),
-      disableDefaultPropsExceptForClasses =
-        dynamicFeatureFlags.disableDefaultPropsExceptForClasses,
-      enableRenderableContext = dynamicFeatureFlags.enableRenderableContext,
       enableTransitionTracing = dynamicFeatureFlags.enableTransitionTracing,
       renameElementSymbol = dynamicFeatureFlags.renameElementSymbol,
-      enableViewTransition = dynamicFeatureFlags.enableViewTransition;
+      enableViewTransition = dynamicFeatureFlags.enableViewTransition,
+      enableAsyncDebugInfo = dynamicFeatureFlags.enableAsyncDebugInfo;
     dynamicFeatureFlags = Symbol.for("react.element");
     var REACT_ELEMENT_TYPE = renameElementSymbol
         ? Symbol.for("react.transitional.element")
@@ -765,7 +796,6 @@ __DEV__ &&
       REACT_FRAGMENT_TYPE = Symbol.for("react.fragment"),
       REACT_STRICT_MODE_TYPE = Symbol.for("react.strict_mode"),
       REACT_PROFILER_TYPE = Symbol.for("react.profiler"),
-      REACT_PROVIDER_TYPE = Symbol.for("react.provider"),
       REACT_CONSUMER_TYPE = Symbol.for("react.consumer"),
       REACT_CONTEXT_TYPE = Symbol.for("react.context"),
       REACT_FORWARD_REF_TYPE = Symbol.for("react.forward_ref"),
@@ -853,13 +883,13 @@ __DEV__ &&
             return null;
           };
     fnName = {
-      "react-stack-bottom-frame": function (callStackForError) {
+      react_stack_bottom_frame: function (callStackForError) {
         return callStackForError();
       }
     };
     var specialPropKeyWarningShown, didWarnAboutOldJSXRuntime;
     var didWarnAboutElementRef = {};
-    var unknownOwnerDebugStack = fnName["react-stack-bottom-frame"].bind(
+    var unknownOwnerDebugStack = fnName.react_stack_bottom_frame.bind(
       fnName,
       UnknownOwner
     )();
@@ -948,6 +978,7 @@ __DEV__ &&
       var getCurrentStack = ReactSharedInternals.getCurrentStack;
       return null === getCurrentStack ? null : getCurrentStack();
     };
+    exports.Activity = REACT_ACTIVITY_TYPE;
     exports.Children = deprecatedAPIs;
     exports.Component = Component;
     exports.Fragment = REACT_FRAGMENT_TYPE;
@@ -955,6 +986,7 @@ __DEV__ &&
     exports.PureComponent = PureComponent;
     exports.StrictMode = REACT_STRICT_MODE_TYPE;
     exports.Suspense = REACT_SUSPENSE_TYPE;
+    exports.ViewTransition = REACT_VIEW_TRANSITION_TYPE;
     exports.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE =
       ReactSharedInternals;
     exports.__COMPILER_RUNTIME = fnName;
@@ -1069,11 +1101,15 @@ __DEV__ &&
         }
       };
     };
+    exports.addTransitionType = addTransitionType;
     exports.c = useMemoCache;
     exports.cache = function (fn) {
       return function () {
         return fn.apply(null, arguments);
       };
+    };
+    exports.cacheSignal = function () {
+      return null;
     };
     exports.cloneElement = function (element, config, children) {
       if (null === element || void 0 === element)
@@ -1104,45 +1140,27 @@ __DEV__ &&
         JSCompiler_inline_result && (owner = getOwner());
         hasValidKey(config) &&
           (checkKeyStringCoercion(config.key), (key = "" + config.key));
-        if (
-          !disableDefaultPropsExceptForClasses &&
-          element.type &&
-          element.type.defaultProps
-        )
-          var defaultProps = element.type.defaultProps;
         for (propName in config)
           !hasOwnProperty.call(config, propName) ||
             "key" === propName ||
             "__self" === propName ||
             "__source" === propName ||
             ("ref" === propName && void 0 === config.ref) ||
-            (props[propName] =
-              disableDefaultPropsExceptForClasses ||
-              void 0 !== config[propName] ||
-              void 0 === defaultProps
-                ? config[propName]
-                : defaultProps[propName]);
+            (props[propName] = config[propName]);
       }
       var propName = arguments.length - 2;
       if (1 === propName) props.children = children;
       else if (1 < propName) {
-        defaultProps = Array(propName);
-        for (
-          JSCompiler_inline_result = 0;
-          JSCompiler_inline_result < propName;
-          JSCompiler_inline_result++
-        )
-          defaultProps[JSCompiler_inline_result] =
-            arguments[JSCompiler_inline_result + 2];
-        props.children = defaultProps;
+        JSCompiler_inline_result = Array(propName);
+        for (var i = 0; i < propName; i++)
+          JSCompiler_inline_result[i] = arguments[i + 2];
+        props.children = JSCompiler_inline_result;
       }
       props = ReactElement(
         element.type,
         key,
-        void 0,
-        void 0,
-        owner,
         props,
+        owner,
         element._debugStack,
         element._debugTask
       );
@@ -1151,7 +1169,7 @@ __DEV__ &&
       return props;
     };
     exports.createContext = function (defaultValue) {
-      var context = {
+      defaultValue = {
         $$typeof: REACT_CONTEXT_TYPE,
         _currentValue: defaultValue,
         _currentValue2: defaultValue,
@@ -1159,70 +1177,19 @@ __DEV__ &&
         Provider: null,
         Consumer: null
       };
-      enableRenderableContext
-        ? ((context.Provider = context),
-          (context.Consumer = {
-            $$typeof: REACT_CONSUMER_TYPE,
-            _context: context
-          }))
-        : ((context.Provider = {
-            $$typeof: REACT_PROVIDER_TYPE,
-            _context: context
-          }),
-          (defaultValue = { $$typeof: REACT_CONTEXT_TYPE, _context: context }),
-          Object.defineProperties(defaultValue, {
-            Provider: {
-              get: function () {
-                return context.Provider;
-              },
-              set: function (_Provider) {
-                context.Provider = _Provider;
-              }
-            },
-            _currentValue: {
-              get: function () {
-                return context._currentValue;
-              },
-              set: function (_currentValue) {
-                context._currentValue = _currentValue;
-              }
-            },
-            _currentValue2: {
-              get: function () {
-                return context._currentValue2;
-              },
-              set: function (_currentValue2) {
-                context._currentValue2 = _currentValue2;
-              }
-            },
-            _threadCount: {
-              get: function () {
-                return context._threadCount;
-              },
-              set: function (_threadCount) {
-                context._threadCount = _threadCount;
-              }
-            },
-            Consumer: {
-              get: function () {
-                return context.Consumer;
-              }
-            },
-            displayName: {
-              get: function () {
-                return context.displayName;
-              },
-              set: function () {}
-            }
-          }),
-          (context.Consumer = defaultValue));
-      context._currentRenderer = null;
-      context._currentRenderer2 = null;
-      return context;
+      defaultValue.Provider = defaultValue;
+      defaultValue.Consumer = {
+        $$typeof: REACT_CONSUMER_TYPE,
+        _context: defaultValue
+      };
+      defaultValue._currentRenderer = null;
+      defaultValue._currentRenderer2 = null;
+      return defaultValue;
     };
     exports.createElement = function (type, config, children) {
       for (var i = 2; i < arguments.length; i++)
         validateChildKeys(arguments[i]);
+      var propName;
       i = {};
       var key = null;
       if (null != config)
@@ -1263,15 +1230,18 @@ __DEV__ &&
             ? type.displayName || type.name || "Unknown"
             : type
         );
-      var propName = 1e4 > ReactSharedInternals.recentlyCreatedOwnerStacks++;
+      (propName = 1e4 > ReactSharedInternals.recentlyCreatedOwnerStacks++)
+        ? ((childArray = Error.stackTraceLimit),
+          (Error.stackTraceLimit = 10),
+          (childrenLength = Error("react-stack-top-frame")),
+          (Error.stackTraceLimit = childArray))
+        : (childrenLength = unknownOwnerDebugStack);
       return ReactElement(
         type,
         key,
-        void 0,
-        void 0,
-        getOwner(),
         i,
-        propName ? Error("react-stack-top-frame") : unknownOwnerDebugStack,
+        getOwner(),
+        childrenLength,
         propName ? createTask(getTaskName(type)) : unknownOwnerDebugTask
       );
     };
@@ -1280,9 +1250,7 @@ __DEV__ &&
       Object.seal(refObject);
       return refObject;
     };
-    exports.experimental_useEffectEvent = function (callback) {
-      return resolveDispatcher().useEffectEvent(callback);
-    };
+    exports.experimental_useEffectEvent = useEffectEvent;
     exports.forwardRef = function (render) {
       null != render && render.$$typeof === REACT_MEMO_TYPE
         ? console.error(
@@ -1325,86 +1293,79 @@ __DEV__ &&
       return elementType;
     };
     exports.isValidElement = isValidElement;
-    exports.jsx = function (type, config, maybeKey, source, self) {
+    exports.jsx = function (type, config, maybeKey) {
       var trackActualOwner =
         1e4 > ReactSharedInternals.recentlyCreatedOwnerStacks++;
+      if (trackActualOwner) {
+        var previousStackTraceLimit = Error.stackTraceLimit;
+        Error.stackTraceLimit = 10;
+        var debugStackDEV = Error("react-stack-top-frame");
+        Error.stackTraceLimit = previousStackTraceLimit;
+      } else debugStackDEV = unknownOwnerDebugStack;
       return jsxDEVImpl(
         type,
         config,
         maybeKey,
         !1,
-        source,
-        self,
-        trackActualOwner
-          ? Error("react-stack-top-frame")
-          : unknownOwnerDebugStack,
+        debugStackDEV,
         trackActualOwner ? createTask(getTaskName(type)) : unknownOwnerDebugTask
       );
     };
-    exports.jsxDEV = function (
-      type,
-      config,
-      maybeKey,
-      isStaticChildren,
-      source,
-      self
-    ) {
+    exports.jsxDEV = function (type, config, maybeKey, isStaticChildren) {
       var trackActualOwner =
         1e4 > ReactSharedInternals.recentlyCreatedOwnerStacks++;
+      if (trackActualOwner) {
+        var previousStackTraceLimit = Error.stackTraceLimit;
+        Error.stackTraceLimit = 10;
+        var debugStackDEV = Error("react-stack-top-frame");
+        Error.stackTraceLimit = previousStackTraceLimit;
+      } else debugStackDEV = unknownOwnerDebugStack;
       return jsxDEVImpl(
         type,
         config,
         maybeKey,
         isStaticChildren,
-        source,
-        self,
-        trackActualOwner
-          ? Error("react-stack-top-frame")
-          : unknownOwnerDebugStack,
+        debugStackDEV,
         trackActualOwner ? createTask(getTaskName(type)) : unknownOwnerDebugTask
       );
     };
-    exports.jsxs = function (type, config, maybeKey, source, self) {
+    exports.jsxs = function (type, config, maybeKey) {
       var trackActualOwner =
         1e4 > ReactSharedInternals.recentlyCreatedOwnerStacks++;
+      if (trackActualOwner) {
+        var previousStackTraceLimit = Error.stackTraceLimit;
+        Error.stackTraceLimit = 10;
+        var debugStackDEV = Error("react-stack-top-frame");
+        Error.stackTraceLimit = previousStackTraceLimit;
+      } else debugStackDEV = unknownOwnerDebugStack;
       return jsxDEVImpl(
         type,
         config,
         maybeKey,
         !0,
-        source,
-        self,
-        trackActualOwner
-          ? Error("react-stack-top-frame")
-          : unknownOwnerDebugStack,
+        debugStackDEV,
         trackActualOwner ? createTask(getTaskName(type)) : unknownOwnerDebugTask
       );
     };
     exports.lazy = function (ctor) {
+      ctor = { _status: -1, _result: ctor };
       var lazyType = {
         $$typeof: REACT_LAZY_TYPE,
-        _payload: { _status: -1, _result: ctor },
+        _payload: ctor,
         _init: lazyInitializer
       };
-      if (!disableDefaultPropsExceptForClasses) {
-        var defaultProps;
-        Object.defineProperties(lazyType, {
-          defaultProps: {
-            configurable: !0,
-            get: function () {
-              return defaultProps;
-            },
-            set: function (newDefaultProps) {
-              console.error(
-                "It is not supported to assign `defaultProps` to a lazy component import. Either specify them where the component is defined, or create a wrapping component around it."
-              );
-              defaultProps = newDefaultProps;
-              Object.defineProperty(lazyType, "defaultProps", {
-                enumerable: !0
-              });
-            }
-          }
-        });
+      if (enableAsyncDebugInfo) {
+        var ioInfo = {
+          name: "lazy",
+          start: -1,
+          end: -1,
+          value: null,
+          owner: null,
+          debugStack: Error("react-stack-top-frame"),
+          debugTask: console.createTask ? console.createTask("lazy()") : null
+        };
+        ctor._ioInfo = ioInfo;
+        lazyType._debugInfo = [{ awaited: ioInfo }];
       }
       return lazyType;
     };
@@ -1488,6 +1449,7 @@ __DEV__ &&
         );
       return resolveDispatcher().useEffect(create, deps);
     };
+    exports.useEffectEvent = useEffectEvent;
     exports.useId = function () {
       return resolveDispatcher().useId();
     };
@@ -1537,7 +1499,7 @@ __DEV__ &&
     exports.useTransition = function () {
       return resolveDispatcher().useTransition();
     };
-    exports.version = "19.2.0-www-classic-14094f80-20250529";
+    exports.version = "19.3.0-www-classic-fb2177c1-20251114";
     "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ &&
       "function" ===
         typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStop &&
